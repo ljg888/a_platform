@@ -3,6 +3,9 @@ from flask_cors import CORS
 from threading import Lock, local
 from db_config import get_db_connection
 import functools
+import subprocess
+import os
+import sys
 
 app = Flask(__name__)
 CORS(app)  # 允许跨域请求
@@ -112,9 +115,10 @@ def delete_config(config_id):
     finally:
         cur.close()
 
+
+
 @app.route('/api/configs/<int:config_id>/run', methods=['POST'])
 def run_config(config_id):
-    # 这里只返回配置信息，具体执行逻辑由用户实现
     conn = get_thread_db()
     cur = conn.cursor()
     try:
@@ -123,6 +127,19 @@ def run_config(config_id):
         if not config:
             return jsonify({"error": "配置不存在"}), 404
         
+        # 确保results目录存在
+        os.makedirs('results', exist_ok=True)
+        
+        # 异步执行holly_infer.py
+        script_path = os.path.join(os.path.dirname(__file__), 'holly_infer.py')
+        subprocess.Popen([
+            sys.executable, 
+            script_path,
+            str(config_id),
+            config[2],  # project
+            config[0],  # model_path
+            config[1]   # dataset_path
+        ])
         
         return jsonify({
             "status": "执行请求已接收",
@@ -136,6 +153,30 @@ def run_config(config_id):
         return jsonify({"error": str(e)}), 500
     finally:
         cur.close()
+
+@app.route('/api/results', methods=['GET'])
+def get_results():
+    project = request.args.get('project')
+    if not project:
+        return jsonify({"error": "请提供项目名"}), 400
+    
+    results_dir = os.path.join('results', project)
+    if not os.path.exists(results_dir):
+        return jsonify({"results": []})
+    
+    results = []
+    for filename in sorted(os.listdir(results_dir), reverse=True):
+        if filename.endswith('.html'):
+            filepath = os.path.join(results_dir, filename)
+            with open(filepath, 'r', encoding='utf-8') as f:
+                content = f.read()
+            results.append({
+                "project": project,
+                "filename": filename,
+                "content": content
+            })
+    
+    return jsonify({"results": results})
 
 if __name__ == '__main__':
     app.run(debug=True, port=5000)
